@@ -11,6 +11,10 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
+In this script, the data used in the book chapter will be created:
+predictors based on worldclim, a virtual habitat suitability for a virtual species as response,
+two different sets of simulated training data, and randomly sampled validation data points.
+
 # Getting started
 ```{r libraries, message = FALSE, warning=FALSE}
 library(terra)
@@ -48,6 +52,12 @@ seed <- 10
 
 ```{r predictors, message = FALSE, warning=FALSE}
 predictors <- predictors[[predictornames]]
+coords <- crds(predictors,df=TRUE,na.rm=FALSE)
+predictors$lat <- predictors[[1]]
+values(predictors$lat) <- coords[,1]
+predictors$lon <- predictors[[1]]
+values(predictors$lon) <- coords[,2]
+
 plot(predictors)
 writeRaster(predictors,"data/predictors.tif",overwrite=TRUE)
 ```
