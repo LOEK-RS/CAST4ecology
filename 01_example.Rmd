@@ -1,0 +1,138 @@
+---
+title: "Example data set"
+output: html_document
+date: "2022-10-31"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Getting started
+```{r libraries, message = FALSE, warning=FALSE}
+library(terra)
+library(raster)
+library(sf)
+library(virtualspecies)
+```
+
+# Simulation of the training set
+
+Let's first define settings for the prediction task, like the number of training points, their distribution (in terms of clusters) as
+well as parameters on how to simulate the response.
+
+
+## Get data
+To prepare the predictors, the bio-climate data are downloaded and cropped to the defined study area.
+
+```{r data, message = FALSE, warning=FALSE}
+# download, select and crop predictors:
+predictors <- rast("data/worldclim.tif")
+```
+
+
+## Generate Predictors and Response
+The virtual response variable is created based on the PCA of a subset of the bioclim predictors. See the virtualspecies package for further information.
+
+```{r settings, message = FALSE, warning=FALSE}
+#### Simulated predictors and response:
+predictornames <- c("bio1","bio2","bio5","bio6","bio7","bio10","bio11","bio12","bio13","bio14","bio15","bio18","bio19")
+simulateResponse <- c("bio2","bio5","bio10", "bio13", "bio14","bio19") # variables used to simulate the response
+meansPCA <- c(3, -1) # means of the gaussian response functions to the 2 axes
+sdPCA <- c(2, 2) # sd's of the gaussian response functions to the 2 axes
+seed <- 10
+```
+
+```{r predictors, message = FALSE, warning=FALSE}
+predictors <- predictors[[predictornames]]
+plot(predictors)
+writeRaster(predictors,"data/predictors.tif",overwrite=TRUE)
+```
+
+```{r variables, message = FALSE, warning=FALSE}
+response_vs <- generateSpFromPCA(as(predictors[[simulateResponse]],"Raster"),
+                                 means = meansPCA,sds = sdPCA, plot=F)
+response <- response_vs$suitab.raster
+writeRaster(response,"data/response.tif",overwrite=TRUE)
+```
+
+## Simulate training and testing points
+When looking at typical global prediction studies, we can see that reference data that are used for model training are often extremely clustered in geographic space (see https://www.nature.com/articles/s41467-022-29838-9).
+To simulate field locations that are typically used as training data, "nclusters" locations are randomly selected (center of clusters).
+The "npoints" are then distributed over the clusters, with a maximum distance of "maxdist" meters around the center of each cluster. For comparison, randomly distributed training data are created as well.
+
+
+
+```{r clusteredpoints, message = FALSE, include=FALSE, warning=FALSE}
+#For a clustered sesign:
+# adjusted from from https://github.com/carlesmila/NNDMpaper/blob/main/code/sim_utils.R
+clustered_sample <- function(sarea, nsamples, nparents, radius, seed){
+  # Number of offspring per parent
+  nchildren <- round((nsamples-nparents)/nparents, 0)
+  # Simulate parents
+  set.seed(seed)
+  parents <- st_sf(geometry=st_sample(sarea, nparents, type="random"))
+  res <- parents
+  res$clstrID <- 1:nrow(parents)
+  # Simulate offspring
+  for(i in 1:nrow(parents)){
+    # Generate buffer and cut parts outside of the area of study
+    buf <- st_buffer(parents[i,], dist=radius)
+    buf <- st_intersection(buf, sarea)
+    # Simulate children
+    set.seed(seed)
+    children <- st_sf(geometry=st_sample(buf, nchildren, type="random"))
+      children$clstrID <- i
+    res <- rbind(res, children)
+  }
+  return(res)
+}
+```
+
+
+```{r samplepoints_settings, message = FALSE, warning=FALSE}
+npoints <- 300 # number of training samples
+nclusters <- 10 #number of clusters if design==clustered
+maxdist <- 150000 #in unit m. size of the clusters
+seed <- 2345
+```
+
+```{r samplepoints_mask, message = FALSE, warning=FALSE}
+#create a mask for land area:
+mask <- as(predictors[[1]],"Raster")
+values(mask)[!is.na(values(mask))] <- 1
+mask <- st_as_sf(rasterToPolygons(mask,dissolve=TRUE))
+```
+
+```{r samplepoints, message = FALSE, warning=FALSE}
+pts_clustered <- clustered_sample(mask,npoints,nclusters,radius=maxdist,seed=seed)
+pts_random <- st_sample(mask, npoints)
+```
+
+
+
+```{r validationpoints, message = FALSE, warning=FALSE}
+validationpoints <- st_sample(mask, npoints)
+```
+
+```{r write, message = FALSE, warning=FALSE,include=FALSE}
+st_write(pts_clustered,"data/pts_clustered.gpkg",append=FALSE)
+st_write(pts_clustered,"data/pts_random.gpkg",append=FALSE)
+st_write(validationpoints,"data/validation.gpkg",append=FALSE)
+```
+
+Now let's visualize the created response variable and the training data points
+
+```{r vis_data, message = FALSE, echo = FALSE, warning=FALSE}
+par(mfrow=c(1,2))
+plot(response,main="response and clustered training data")
+plot(pts_clustered,add=T, col="black",cex=0.5)
+legend("topleft",pch=1,legend="training",bty="n",col="black",pt.cex=0.5)
+
+plot(response,main="response and random training data")
+plot(pts_random,add=T, col="black",cex=0.5)
+legend("topleft",pch=1,legend="training",bty="n",col="black",pt.cex=0.5)
+```
