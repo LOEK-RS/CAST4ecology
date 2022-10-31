@@ -109,12 +109,14 @@ mask <- st_as_sf(rasterToPolygons(mask,dissolve=TRUE))
 
 ```{r samplepoints, message = FALSE, warning=FALSE}
 pts_clustered <- clustered_sample(mask,npoints,nclusters,radius=maxdist,seed=seed)
+set.seed(seed)
 pts_random <- st_sample(mask, npoints)
 ```
 
 
 
 ```{r validationpoints, message = FALSE, warning=FALSE}
+set.seed(1)
 validationpoints <- st_sample(mask, npoints)
 ```
 
@@ -127,12 +129,16 @@ st_write(validationpoints,"data/validation.gpkg",append=FALSE)
 Now let's visualize the created response variable and the training data points
 
 ```{r vis_data, message = FALSE, echo = FALSE, warning=FALSE}
-par(mfrow=c(1,2))
+par(mfrow=c(1,3))
 plot(response,main="response and clustered training data")
 plot(pts_clustered,add=T, col="black",cex=0.5)
 legend("topleft",pch=1,legend="training",bty="n",col="black",pt.cex=0.5)
 
 plot(response,main="response and random training data")
 plot(pts_random,add=T, col="black",cex=0.5)
+legend("topleft",pch=1,legend="training",bty="n",col="black",pt.cex=0.5)
+
+plot(response,main="response and validation data")
+plot(validationpoints,add=T, col="black",cex=0.5)
 legend("topleft",pch=1,legend="training",bty="n",col="black",pt.cex=0.5)
 ```
