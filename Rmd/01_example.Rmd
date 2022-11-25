@@ -65,8 +65,10 @@ writeRaster(predictors,"data/predictors.tif",overwrite=TRUE)
 ```{r variables, message = FALSE, warning=FALSE}
 response_vs <- generateSpFromPCA(as(predictors[[simulateResponse]],"Raster"),
                                  means = meansPCA,sds = sdPCA, plot=F)
-response <- response_vs$suitab.raster
-writeRaster(response,"data/response.tif",overwrite=TRUE)
+response <- rast(response_vs$suitab.raster)
+crs(response) <- "EPSG:4326"
+names(response) <- "suitability"
+writeRaster(response, "data/response.tif", overwrite=TRUE)
 ```
 
 ## Simulate training and testing points
@@ -115,6 +117,7 @@ seed <- 2345
 mask <- as(predictors[[1]],"Raster")
 values(mask)[!is.na(values(mask))] <- 1
 mask <- st_as_sf(rasterToPolygons(mask,dissolve=TRUE))
+st_crs(mask) <- 4326
 ```
 
 ```{r samplepoints, message = FALSE, warning=FALSE}
@@ -132,7 +135,7 @@ validationpoints <- st_sample(mask, npoints)
 st_write(mask,"data/AOI.gpkg",append=FALSE)
 st_write(pts_clustered,"data/pts_clustered.gpkg",append=FALSE)
 st_write(pts_clustered,"data/pts_random.gpkg",append=FALSE)
-st_write(validationpoints,"data/validation.gpkg",append=FALSE)
+st_write(validationpoints,"data/pts_validation.gpkg",append=FALSE)
 ```
 
 Now let's visualize the created response variable and the training data points
