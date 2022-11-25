@@ -131,10 +131,10 @@ set.seed(1)
 validationpoints <- st_sample(mask, npoints)
 ```
 
-```{r write, message = FALSE, warning=FALSE,include=FALSE}
+```{r write, message = FALSE, warning=FALSE, include=FALSE}
 st_write(mask,"data/AOI.gpkg",append=FALSE)
 st_write(pts_clustered,"data/pts_clustered.gpkg",append=FALSE)
-st_write(pts_clustered,"data/pts_random.gpkg",append=FALSE)
+st_write(pts_random,"data/pts_random.gpkg",append=FALSE)
 st_write(validationpoints,"data/pts_validation.gpkg",append=FALSE)
 ```
 
