@@ -1,0 +1,382 @@
+---
+title: "Chapter 4: CV for map accuracy estimation"
+output: html_document
+date: "`r Sys.Date()`"
+author: Carles Milà
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F, fig.align = 'center')
+```
+
+**Notes**: 
+
+Shared legend at the cost of importing another package? cowplot or ggpubr.
+
+Change to colour-blind safe palettes
+
+### Setup and data
+
+```{r libraries}
+library(terra)
+library(sf)
+library(raster)
+library(ggplot2)
+library(gridExtra)
+library(caret)
+library(ranger)
+library(knitr)
+library(CAST)
+```
+
+```{r readdata}
+# Read data
+pts_clustered <- st_read("data/pts_clustered.gpkg", quiet = T)
+pts_random <- st_read("data/pts_random.gpkg", quiet = T)
+pts_validation <- st_read("data/pts_validation.gpkg", quiet = T)
+aoi <- st_read("data/AOI.gpkg", quiet = T)
+predictors <- rast("data/predictors.tif")
+response <- rast("data/response.tif")
+
+# Terra to CRS - plot_geodist doesn't support terra, needs to be fixed
+# Also proj4 warning!?
+predictors_r <- stack(predictors)
+raster::crs(predictors_r) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" 
+response_r <- raster(response)
+raster::crs(response_r) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" 
+```
+
+### 4.0 Motivation
+
+Motivate the problem by showing the difference in NND functions and ideally a random sample of validation points, which is not available in most cases.
+
+In geographical space:
+
+```{r 4.0 geo, fig.width=10, fig.height=5}
+plt_rand_geo <- plot_geodist(pts_random, aoi, testdata = pts_validation, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom") + labs(fill = "") +
+  ggtitle("Random points")
+plt_clust_geo <- plot_geodist(pts_clustered, testdata = pts_validation, aoi, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom")  + labs(fill = "") +
+  ggtitle("Clustered points")
+grid.arrange(plt_rand_geo, plt_clust_geo, nrow = 1)
+```
+
+In feature space:
+
+```{r 4.0 feature, fig.width=10, fig.height=5}
+plt_rand_feat <- plot_geodist(pts_random, predictors_r, type = "feature",
+                              testdata = pts_validation, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom") + scale_fill_discrete(name = "") +
+  ggtitle("Random points")
+plt_clust_feat <- plot_geodist(pts_clustered, predictors_r, type = "feature",
+                               testdata = pts_validation, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom") + scale_fill_discrete(name = "") +
+  ggtitle("Clustered points")
+grid.arrange(plt_rand_feat, plt_clust_feat, nrow = 1)
+```
+
+### 4.1 Random and spatial CV
+
+Define 5 random folds:
+
+```{r 4.1 randomfolds, fig.width=10, fig.height=5}
+# Fold generation
+set.seed(123)
+pts_random$random_fold <- sample(rep(1:5, ceiling(nrow(pts_random)/5)),
+                                 nrow(pts_random))
+pts_random$random_fold <- as.factor(pts_random$random_fold)
+pts_clustered$random_fold <- sample(rep(1:5, ceiling(nrow(pts_random)/5)),
+                                    nrow(pts_random))
+pts_clustered$random_fold <- as.factor(pts_clustered$random_fold)
+
+# Cartographic representation
+map1_random <- ggplot() +
+  geom_sf(data = aoi) +
+  geom_sf(data = pts_random, aes(col = random_fold)) +
+  scale_color_discrete() +
+  theme_bw() + theme(legend.position = "bottom")
+map1_clustered <- ggplot() +
+  geom_sf(data = aoi) +
+  geom_sf(data = pts_clustered, aes(col = random_fold)) +
+  theme_bw() + theme(legend.position = "bottom")
+grid.arrange(map1_random, map1_clustered, nrow = 1)
+```
+
+Define 5 spatial folds:
+
+```{r 4.1 spatialfolds, fig.width=10, fig.height=5}
+# Fold generation
+naive_spblocks <- function(tpoints, aoipoly, blocksize, k, seed){
+  set.seed(seed)
+  polygrid <- st_sf(geom = st_make_grid(aoipoly, blocksize))
+  polygrid <- polygrid[apply(st_intersects(polygrid, tpoints, sparse = F), 1, any),]
+  polygrid$spatial_fold <- sample(rep(1:k, ceiling(nrow(polygrid)/k)), nrow(polygrid))
+  st_drop_geometry(st_join(tpoints, polygrid))$spatial_fold
+}
+pts_random$spatial_fold <- naive_spblocks(pts_random, aoi, 5, 5, 1234)
+pts_random$spatial_fold <- as.factor(pts_random$spatial_fold)
+pts_clustered$spatial_fold <- naive_spblocks(pts_clustered, aoi, 5, 5, 1234)
+pts_clustered$spatial_fold <- as.factor(pts_clustered$spatial_fold)
+
+# Cartographic representation
+map2_random <- ggplot() +
+  geom_sf(data = aoi) +
+  geom_sf(data = pts_random, aes(col = spatial_fold)) +
+  scale_color_discrete() +
+  theme_bw() + theme(legend.position = "bottom")
+map2_clustered <- ggplot() +
+  geom_sf(data = aoi) +
+  geom_sf(data = pts_clustered, aes(col = spatial_fold)) +
+  theme_bw() + theme(legend.position = "bottom")
+grid.arrange(map2_random, map2_clustered, nrow = 1)
+```
+
+Create CV lists by using CAST:
+
+```{r CASTfunction}
+rand_rCV_folds <- CreateSpacetimeFolds(st_drop_geometry(pts_random), spacevar = "random_fold", k = 5)
+clust_rCV_folds <- CreateSpacetimeFolds(st_drop_geometry(pts_clustered), spacevar = "random_fold", k = 5)
+rand_sCV_folds <- CreateSpacetimeFolds(st_drop_geometry(pts_random), spacevar = "spatial_fold", k = 5) 
+clust_sCV_folds <- CreateSpacetimeFolds(st_drop_geometry(pts_clustered), spacevar = "spatial_fold", k = 5)
+```
+
+In geographical space:
+
+```{r 4.1 geo, fig.width=10, fig.height=8}
+plt_rand_geo1 <- plot_geodist(pts_random, aoi, 
+                              cvfolds = rand_rCV_folds$indexOut, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom") + labs(fill = "") +
+  ggtitle("Random points, random CV")
+plt_clust_geo1 <- plot_geodist(pts_clustered, aoi,
+                               cvfolds = clust_rCV_folds$indexOut, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom")  + labs(fill = "") +
+  ggtitle("Clustered points, random CV")
+plt_rand_geo2 <- plot_geodist(pts_random, aoi, 
+                              cvfolds = rand_sCV_folds$indexOut, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom") + labs(fill = "") +
+  ggtitle("Random points, spatial CV")
+plt_clust_geo2 <- plot_geodist(pts_clustered, aoi, 
+                               cvfolds = clust_sCV_folds$indexOut, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom")  + labs(fill = "") +
+  ggtitle("Clustered points, spatial CV")
+grid.arrange(plt_rand_geo1, plt_clust_geo1, plt_rand_geo2, plt_clust_geo2, nrow = 2)
+```
+
+In feature space:
+
+```{r 4.1 feature, fig.width=10, fig.height=8}
+plt_rand_feat1 <- plot_geodist(pts_random, predictors_r, type = "feature",
+                               cvfolds = rand_rCV_folds$indexOut, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom") + labs(fill = "") +
+  ggtitle("Random points, random CV")
+plt_clust_feat1 <- plot_geodist(pts_clustered, predictors_r, type = "feature",
+                                cvfolds = clust_rCV_folds$indexOut, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom")  + labs(fill = "") +
+  ggtitle("Clustered points, random CV")
+plt_rand_feat2 <- plot_geodist(pts_random, predictors_r, type = "feature",
+                               cvfolds = rand_sCV_folds$indexOut, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom") + labs(fill = "") +
+  ggtitle("Random points, spatial CV")
+plt_clust_feat2 <- plot_geodist(pts_clustered, predictors_r, type = "feature", 
+                                cvfolds = clust_sCV_folds$indexOut, showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom")  + labs(fill = "") +
+  ggtitle("Clustered points, spatial CV")
+grid.arrange(plt_rand_feat1, plt_clust_feat1, plt_rand_feat2, plt_clust_feat2, nrow = 2)
+```
+
+### 4.2 Nearest neighbour distance matching cross-validation
+
+```{r nndm}
+rand_nndm_folds <- nndm(pts_random, aoi, min_train = 0.6)
+clust_nndm_folds <- nndm(pts_clustered, aoi, min_train = 0.6)
+```
+
+In geographical space:
+
+```{r 4.2 geo, fig.width=10, fig.height=4}
+plt_rand_geo1 <- plot_geodist(pts_random, aoi, 
+                              cvfolds = rand_nndm_folds$indx_test, 
+                              cvtrain = rand_nndm_folds$indx_train,
+                              showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom") + labs(fill = "") +
+  ggtitle("Random points, NNDM LOO CV")
+plt_clust_geo1 <- plot_geodist(pts_clustered, aoi,
+                               cvfolds = clust_nndm_folds$indx_test, 
+                               cvtrain = clust_nndm_folds$indx_train,
+                               showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom")  + labs(fill = "") +
+  ggtitle("Clustered points, NNDM LOO CV")
+grid.arrange(plt_rand_geo1, plt_clust_geo1, nrow = 1)
+```
+
+In feature space:
+
+```{r 4.2 feature, fig.width=10, fig.height=4}
+plt_rand_feat1 <- plot_geodist(pts_random, predictors_r, type = "feature",
+                               cvfolds = rand_nndm_folds$indx_test, 
+                               cvtrain = rand_nndm_folds$indx_train,
+                               showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom") + labs(fill = "") +
+  ggtitle("Random points, NNDM LOO CV")
+plt_clust_feat1 <- plot_geodist(pts_clustered, predictors_r, type = "feature",
+                                cvfolds = clust_nndm_folds$indx_test, 
+                                cvtrain = clust_nndm_folds$indx_train,
+                                showPlot = F)$plot +
+  theme_bw() +
+  theme(legend.position = "bottom")  + labs(fill = "") +
+  ggtitle("Clustered points, NNDM LOO CV")
+grid.arrange(plt_rand_feat1, plt_clust_feat1, nrow = 1)
+```
+
+### 4.3 Model fitting and validation
+
+Common objects:
+
+```{r commonparams}
+pgrid <- data.frame(mtry = 5, min.node.size = 5, splitrule = "variance")
+form <- paste0("suitability ~ " , paste0("bio", c("1", "2", "5", "6", "7", "10",
+                                                 "11", "12", "13", "14", "15", "18", 
+                                                 "19"), collapse = " + "),
+               " + lon + lat")
+form <- as.formula(form)
+response_df <- as.data.frame(c(response, predictors))
+response_df <- response_df[apply(response_df, 1, function(x) all(!is.nan(x))),]
+```
+
+Model 1: Random samples
+
+```{r modrand}
+cntrl_mod <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+rand_mod <- train(form, data = st_drop_geometry(pts_random), method="ranger", 
+                  trControl = cntrl_mod, tuneGrid = pgrid)
+```
+
+Evaluation 1.1: true map accuracy
+
+```{r ev1.1}
+rand_true <- predict(rand_mod, newdata = response_df)
+rand_true_rmse <- sqrt(mean((response_df$suitability - rand_true)^2))
+```
+
+Evaluation 1.2: probability sample
+
+```{r ev1.2}
+rand_prob <- predict(rand_mod, newdata = pts_validation)
+rand_prob_rmse <- sqrt(mean((pts_validation$suitability - rand_prob)^2))
+```
+
+Evaluation 1.3: random CV
+
+```{r ev1.3}
+cntrl_mod <- trainControl(method = "cv", index = rand_rCV_folds$index, allowParallel = TRUE,
+                          savePredictions='final')
+rand_rCV <- train(form, data = st_drop_geometry(pts_random), method="ranger", 
+                  trControl = cntrl_mod, tuneGrid = pgrid)
+rand_rCV_rmse <- global_validation(rand_rCV)["RMSE"]
+```
+
+Evaluation 1.4: spatial CV
+
+```{r ev1.4}
+cntrl_mod <- trainControl(method = "cv", index = rand_sCV_folds$index, allowParallel = TRUE,
+                          savePredictions='final')
+rand_sCV <- train(form, data = st_drop_geometry(pts_random), method="ranger", 
+                  trControl = cntrl_mod, tuneGrid = pgrid)
+rand_sCV_rmse <- global_validation(rand_sCV)["RMSE"]
+```
+
+Evaluation 1.5: NNDM CV
+
+```{r ev1.5}
+cntrl_mod <- trainControl(method = "cv", 
+                          index = rand_nndm_folds$indx_train,
+                          indexOut = rand_nndm_folds$indx_test,
+                          allowParallel = TRUE, savePredictions='final')
+rand_nndmCV <- train(form, data = st_drop_geometry(pts_random), method="ranger", 
+                     trControl = cntrl_mod, tuneGrid = pgrid)
+rand_nndmCV_rmse <- global_validation(rand_nndmCV)["RMSE"]
+```
+
+Model 2: Clustered samples
+
+```{r modclust}
+cntrl_mod <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+clust_mod <- train(form, data = st_drop_geometry(pts_clustered), method="ranger", 
+                   trControl = cntrl_mod, tuneGrid = pgrid)
+```
+
+Evaluation 2.1: true map accuracy
+
+```{r ev2.1}
+clust_true <- predict(clust_mod, newdata = response_df)
+clust_true_rmse <- sqrt(mean((response_df$suitability - clust_true)^2))
+```
+
+Evaluation 2.2: probability sample
+
+```{r ev2.2}
+clust_prob <- predict(clust_mod, newdata = pts_validation)
+clust_prob_rmse <- sqrt(mean((pts_validation$suitability - clust_prob)^2))
+```
+
+Evaluation 2.3: random CV
+
+```{r ev2.3}
+cntrl_mod <- trainControl(method = "cv", index = clust_rCV_folds$index, allowParallel = TRUE,
+                          savePredictions='final')
+clust_rCV <- train(form, data = st_drop_geometry(pts_clustered), method="ranger", 
+                  trControl = cntrl_mod, tuneGrid = pgrid)
+clust_rCV_rmse <- global_validation(clust_rCV)["RMSE"]
+```
+
+Evaluation 2.4: spatial CV
+
+```{r ev2.4}
+cntrl_mod <- trainControl(method = "cv", index = clust_sCV_folds$index, allowParallel = TRUE,
+                          savePredictions='final')
+clust_sCV <- train(form, data = st_drop_geometry(pts_clustered), method="ranger", 
+                  trControl = cntrl_mod, tuneGrid = pgrid)
+clust_sCV_rmse <- global_validation(clust_sCV)["RMSE"]
+```
+
+Evaluation 2.5: NNDM CV
+
+```{r ev2.5}
+cntrl_mod <- trainControl(method = "cv", 
+                          index = clust_nndm_folds$indx_train,
+                          indexOut = clust_nndm_folds$indx_test,
+                          allowParallel = TRUE, savePredictions='final')
+clust_nndmCV <- train(form, data = st_drop_geometry(pts_clustered), method="ranger", 
+                      trControl = cntrl_mod, tuneGrid = pgrid)
+clust_nndmCV_rmse <- global_validation(clust_nndmCV)["RMSE"]
+```
+
+Table of results RMSE:
+
+```{r tabres}
+resmod <- data.frame(Sampling = c("Random", "Clustered"),
+                     True = c(rand_true_rmse, clust_true_rmse),
+                     ProbSample = c(rand_prob_rmse, clust_prob_rmse),
+                     rCV = c(rand_rCV_rmse, clust_rCV_rmse),
+                     sCV = c(rand_sCV_rmse, clust_sCV_rmse),
+                     NNDM = c(rand_nndmCV_rmse, clust_nndmCV_rmse))
+kable(resmod, digits = 3)
+```
