@@ -7,7 +7,8 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE,  message = FALSE, warning = FALSE,
+                      fig.align = 'center')
 ```
 
 
@@ -16,7 +17,7 @@ predictors based on worldclim, a virtual habitat suitability for a virtual speci
 two different sets of simulated training data, and randomly sampled validation data points.
 
 # Getting started
-```{r libraries, message = FALSE, warning=FALSE}
+```{r libraries}
 library(terra)
 library(raster)
 library(sf)
@@ -30,18 +31,20 @@ well as parameters on how to simulate the response.
 
 
 ## Get data
+
 To prepare the predictors, the bio-climate data are downloaded and cropped to the defined study area.
 
-```{r data, message = FALSE, warning=FALSE}
+```{r data}
 # download, select and crop predictors:
 predictors <- rast("data/worldclim.tif")
 ```
 
 
 ## Generate Predictors and Response
+
 The virtual response variable is created based on the PCA of a subset of the bioclim predictors. See the virtualspecies package for further information.
 
-```{r settings, message = FALSE, warning=FALSE}
+```{r settings}
 #### Simulated predictors and response:
 predictornames <- c("bio1","bio2","bio5","bio6","bio7","bio10","bio11","bio12","bio13","bio14","bio15","bio18","bio19")
 simulateResponse <- c("bio2","bio5","bio10", "bio13", "bio14","bio19") # variables used to simulate the response
@@ -50,19 +53,18 @@ sdPCA <- c(2, 2) # sd's of the gaussian response functions to the 2 axes
 seed <- 10
 ```
 
-```{r predictors, message = FALSE, warning=FALSE}
+```{r predictors, fig.width=9, fig.height=6}
 predictors <- predictors[[predictornames]]
 coords <- crds(predictors,df=TRUE,na.rm=FALSE)
 predictors$lat <- predictors[[1]]
 values(predictors$lat) <- coords[,1]
 predictors$lon <- predictors[[1]]
 values(predictors$lon) <- coords[,2]
-
 plot(predictors)
 writeRaster(predictors,"data/predictors.tif",overwrite=TRUE)
 ```
 
-```{r variables, message = FALSE, warning=FALSE}
+```{r variables}
 response_vs <- generateSpFromPCA(as(predictors[[simulateResponse]],"Raster"),
                                  means = meansPCA,sds = sdPCA, plot=F)
 response <- rast(response_vs$suitab.raster)
@@ -72,14 +74,13 @@ writeRaster(response, "data/response.tif", overwrite=TRUE)
 ```
 
 ## Simulate training and testing points
+
 When looking at typical global prediction studies, we can see that reference data that are used for model training are often extremely clustered in geographic space (see https://www.nature.com/articles/s41467-022-29838-9).
 To simulate field locations that are typically used as training data, "nclusters" locations are randomly selected (center of clusters).
 The "npoints" are then distributed over the clusters, with a maximum distance of "maxdist" meters around the center of each cluster. For comparison, randomly distributed training data are created as well.
 
-
-
-```{r clusteredpoints, message = FALSE, include=FALSE, warning=FALSE}
-#For a clustered sesign:
+```{r clusteredpoints, include=FALSE, warning=FALSE}
+#For a clustered design:
 # adjusted from from https://github.com/carlesmila/NNDMpaper/blob/main/code/sim_utils.R
 clustered_sample <- function(sarea, nsamples, nparents, radius, seed){
   # Number of offspring per parent
@@ -104,43 +105,52 @@ clustered_sample <- function(sarea, nsamples, nparents, radius, seed){
 }
 ```
 
-
-```{r samplepoints_settings, message = FALSE, warning=FALSE}
+```{r samplepoints_settings}
 npoints <- 300 # number of training samples
 nclusters <- 10 #number of clusters if design==clustered
-maxdist <- 150000 #in unit m. size of the clusters
+maxdist <- 250000 #in unit m. size of the clusters
 seed <- 2345
 ```
 
-```{r samplepoints_mask, message = FALSE, warning=FALSE}
-#create a mask for land area:
+```{r samplepoints_mask}
+# create a mask for land area
 mask <- as(predictors[[1]],"Raster")
 values(mask)[!is.na(values(mask))] <- 1
 mask <- st_as_sf(rasterToPolygons(mask,dissolve=TRUE))
 st_crs(mask) <- 4326
 ```
 
-```{r samplepoints, message = FALSE, warning=FALSE}
-pts_clustered <- clustered_sample(mask,npoints,nclusters,radius=maxdist,seed=seed)
+```{r samplepoints}
+# Simulate points
 set.seed(seed)
-pts_random <- st_sample(mask, npoints)
+pts_random <- st_sf(geometry = st_sample(mask, npoints))
+pts_validation <- st_sf(geometry = st_sample(mask, npoints))
+pts_clustered <- clustered_sample(mask, npoints, nclusters, radius=maxdist, seed=seed)
+pts_clustered$clstrID <- NULL # We don't need it
 ```
 
-```{r validationpoints, message = FALSE, warning=FALSE}
-set.seed(1)
-validationpoints <- st_sample(mask, npoints)
+```{r extraction}
+# Stack and extract
+rstack <- c(response, predictors)
+df_random <- extract(rstack, vect(pts_random), ID=FALSE)
+df_validation <- extract(rstack, vect(pts_validation), ID=FALSE)
+df_clustered <- extract(rstack, vect(pts_clustered), ID=FALSE)
+pts_random <- cbind(pts_random, df_random)
+pts_validation <- cbind(pts_validation, df_validation)
+pts_clustered <- cbind(pts_clustered, df_clustered)
 ```
 
-```{r write, message = FALSE, warning=FALSE, include=FALSE}
-st_write(mask,"data/AOI.gpkg",append=FALSE)
-st_write(pts_clustered,"data/pts_clustered.gpkg",append=FALSE)
-st_write(pts_random,"data/pts_random.gpkg",append=FALSE)
-st_write(validationpoints,"data/pts_validation.gpkg",append=FALSE)
+```{r write, include=FALSE}
+# Write
+st_write(mask,"data/AOI.gpkg", append=FALSE)
+st_write(pts_clustered,"data/pts_clustered.gpkg", append=FALSE)
+st_write(pts_random,"data/pts_random.gpkg", append=FALSE)
+st_write(pts_validation,"data/pts_validation.gpkg", append=FALSE)
 ```
 
 Now let's visualize the created response variable and the training data points
 
-```{r vis_data, message = FALSE, echo = FALSE, warning=FALSE}
+```{r vis_data, fig.width=10, fig.height=3}
 par(mfrow=c(1,3))
 plot(response,main="response and clustered training data")
 plot(pts_clustered,add=T, col="black",cex=0.5)
@@ -151,6 +161,6 @@ plot(pts_random,add=T, col="black",cex=0.5)
 legend("topleft",pch=1,legend="training",bty="n",col="black",pt.cex=0.5)
 
 plot(response,main="response and validation data")
-plot(validationpoints,add=T, col="black",cex=0.5)
+plot(pts_validation,add=T, col="black",cex=0.5)
 legend("topleft",pch=1,legend="training",bty="n",col="black",pt.cex=0.5)
 ```
