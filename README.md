@@ -6,3 +6,8 @@ Code for a book chapter on the CAST package
 
 Figures are in `cast4ecology_figures_files/figure-html`
 
+Abbreviations:
+
+rcv = model with all worldclim, random cv
+knn = model with all worldclim, knndm cv
+ffs = model with feature selected variables based on knndm
