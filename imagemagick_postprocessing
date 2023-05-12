@@ -1,0 +1,16 @@
+# Trim white space
+
+## for one image:
+convert input.png -trim output.png
+
+## for all images in directory:
+mogrify -format png -trim *.png  
+
+# Merge Images:
+`+append` horizontal
+`-append` vertical
+
+convert input1.png input2.png +append output.png
+convert input1.png input2.png -append output.png
+
+
