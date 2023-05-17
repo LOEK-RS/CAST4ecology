@@ -1,0 +1,18 @@
+project:
+  type: website
+  output-dir: docs
+  render: 
+    - index.qmd
+
+website:
+  title: "CAST4Ecology"
+  navbar:
+    left:
+      - href: index.qmd
+        text: CAST4Ecology
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
