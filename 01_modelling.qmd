@@ -130,7 +130,6 @@ saveRDS(rfmodel_scv, "modelling/spatialcv_model.RDS")
 
 ```{r}
 scv_aoa = CAST::aoa(predictors, rfmodel_scv)
-
 scv_plot = plot(scv_aoa)
 
 saveRDS(scv_aoa$parameters, "modelling/spatialcv_aoastats.RDS")

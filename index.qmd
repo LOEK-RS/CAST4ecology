@@ -380,11 +380,64 @@ ffs_knndmcv = CAST::ffs(predictors = training_data |> select(all_of(predictor_na
 ```
 
 
+### Selected Variables
+
+
+```{r ffs-selectedvars}
+#| code-fold: true
+#| code-summary: "Plot Selected Variables and Performance"
+
+
+selectedVars = ffs_knndmcv$selectedvars
+
+# extract info from FFS
+df = data.frame(Variables = factor(c(paste(selectedVars[1], selectedVars[2], sep = " + "), paste0("+ ", selectedVars[c(-1,-2)])),
+                                     levels = c(paste(selectedVars[1], selectedVars[2], sep = " + "), paste0("+ ", selectedVars[c(-1,-2)]))),
+                  Performance = ffs_knndmcv$selectedvars_perf,
+                  Performance_SE = ffs_knndmcv$selectedvars_perf_SE,
+                  Improvement = ffs_knndmcv$selectedvars_perf[lag(1:length(ffs_knndmcv$selectedvars_perf))] - ffs_knndmcv$selectedvars_perf)
+
+# create plot
+ggplot(df, aes(x = Performance, y = Variables))+
+  geom_point()+
+  geom_segment(aes(y = Variables,
+                   yend = Variables,
+                    x = Performance - Performance_SE,
+                    xend = Performance + Performance_SE))+
+  scale_y_discrete(name = NULL,limits=rev)+
+  scale_x_continuous(name = "RMSE", limits=rev)+
+  theme_light()+
+  theme(panel.grid.major.y = element_blank(),
+        axis.text = element_text(color = "black", size = 10))
+```
+
+
+```{r ffs-mapping}
+#| code-fold: true
+#| code-summary: "Map creation with tmap"
+
+
+ffs_prediction = predict(predictors, ffs_knndmcv, na.rm = TRUE)
+
+tm_shape(ffs_prediction)+
+    tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
+              palette = mako(50, begin = 0.2),
+              legend.reverse = TRUE)+
+        tm_layout(legend.position = c("right", "bottom"),
+              legend.just = "left",
+              frame = FALSE)
+
+```
+
+
 
 ```{r model-comparison}
 #| eval: true
 #| code-fold: true
 #| code-summary: "Compare Model Results"
+
+
+
 
 cv_results = rbind(global_validation(rfmodel_rcv),
     global_validation(rfmodel_knndmcv),
@@ -408,7 +461,6 @@ knitr::kable(cv_results)
 ```{r calibrate}
 #| eval: true
 #| cache: true
-ffs_prediction = predict(predictors, ffs_knndmcv, na.rm = TRUE)
 aoa_ffs = aoa(predictors, model = ffs_knndmcv)
 
 set.seed(10)
