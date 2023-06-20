@@ -3,6 +3,7 @@ title: "CAST4Ecology Modelling Tutorial"
 execute: 
   warning: false
   message: false
+  cache: true
 ---
 
 
@@ -47,9 +48,9 @@ library(ggpubr)
 
 
 predictors <- rast("data/predictors.tif")
-reference_points <- st_read("data/training_data.gpkg")
+reference_points <- st_read("data/training_data.gpkg", quiet = TRUE)
 training_data <- reference_points |> st_drop_geometry() # reference samples without coordinates
-modeldomain <- st_read("data/modeldomain.gpkg")
+modeldomain <- st_read("data/modeldomain.gpkg", quiet = TRUE)
 
 
 
@@ -111,8 +112,6 @@ prediction_rcv <- predict(predictors, rfmodel_rcv, na.rm = TRUE)
 
 
 ```{r rcv-prediction}
-#| code-fold: true
-#| code-summary: "knndm-cv visualization with tmap and ggplot2"
 tm_shape(prediction_rcv)+
     tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
               palette = mako(50, begin = 0.2),
@@ -156,11 +155,6 @@ reference_points$random_fold = sample(seq(5),
 ```
 
 ```{r rcv-plots}
-#| code-fold: true
-#| code-summary: "knndm-cv visualization with tmap and ggplot2"
-#| layout-ncol: 2
-
-
 tm_shape(modeldomain)+
     tm_borders()+
     tm_shape(reference_points)+
@@ -173,7 +167,7 @@ tm_shape(modeldomain)+
 
 
 
-plot_geodist(reference_points,
+gd_rcv <- plot_geodist(reference_points,
                   modeldomain,
                   cvfolds = reference_points$random_fold,
                   showPlot = FALSE)
@@ -237,7 +231,6 @@ knndmcv_ecdf$plot +
 ### Random Forest Model with knndm-cv
 
 ```{r knndm-model}
-
 tr_control <- trainControl(method = "cv",
                          number = 5,
                          index = knndm_folds$indx_train,
@@ -250,9 +243,6 @@ rfmodel_knndmcv <- caret::train(x = training_data[,predictor_names],
                            method = "ranger",
                            num.trees = 100,
                            trControl = tr_control)
-
-global_validation(rfmodel_knndmcv)
-
 ```
 
 
@@ -266,17 +256,16 @@ global_validation(rfmodel_knndmcv)
 
 
 ```{r ffs}
-set.seed(65)
+#| output: false
+set.seed(62)
 rfmodel_ffs <- CAST::ffs(training_data[,predictor_names],
                          training_data[,response_name],
                          method = "ranger",
                          importance = "permutation",
                          num.trees = 100,
-                         trControl = tr_control)
+                         trControl = tr_control,
+                         verbose = FALSE)
 prediction_ffs <- predict(predictors, rfmodel_ffs, na.rm = TRUE)
-global_validation(rfmodel_ffs)
-plot(rfmodel_ffs, plotType = "selected")
-
 ```
 
 
@@ -294,10 +283,20 @@ tm_shape(prediction_ffs)+
 
 
 ```{r ffs-selected}
+plot_df = data.frame(labels = c(paste(rfmodel_ffs$selectedvars[1:rfmodel_ffs$minVar], collapse = "\n"),
+                                    paste(rfmodel_ffs$selectedvars[-1:-rfmodel_ffs$minVar], sep = "+")),
+                         perf = rfmodel_ffs$selectedvars_perf,
+                         perfse = rfmodel_ffs$selectedvars_perf_SE)
 
-# TODO
-
-
+    par(mar = c(5,5,5,10))
+    bp = barplot(plot_df$perf, horiz = TRUE, names.arg = plot_df$labels, beside = T,
+                 xlim = c(0, max(plot_df$perf + plot_df$perfse)),
+                 xlab = "RMSE")
+    arrows(y0 = bp,
+           y1 = bp,
+           x0 = plot_df$perf - plot_df$perfse,
+           x1 = plot_df$perf + plot_df$perfse,
+           angle=90, code=3)
 ```
 
 
@@ -311,9 +310,6 @@ AOA = CAST::aoa(predictors, model = rfmodel_ffs)
 
 
 ```{r knndm-mapping}
-#| code-fold: true
-#| code-summary: "Map creation with tmap"
-
 tm_shape(AOA$DI)+
     tm_raster(palette = viridis(50), style = "cont", legend.reverse = TRUE, breaks = c(0,0.1,0.282,0.5,1))+
             tm_layout(legend.position = c("right", "bottom"),
@@ -338,10 +334,6 @@ tm_shape(prediction_ffs)+
 
 
 ```{r model-comparison}
-#| eval: true
-#| code-fold: true
-#| code-summary: "Compare Model Results"
-
 cv_results = rbind(global_validation(rfmodel_rcv),
     global_validation(rfmodel_knndmcv),
     global_validation(rfmodel_ffs)) |> 
@@ -358,18 +350,12 @@ knitr::kable(cv_results)
 ## Pixel-wise performance estimation
 
 ```{r calibrate}
-#| eval: true
-#| cache: true
 set.seed(10)
 expected_perf = calibrate_aoa(AOA, rfmodel_ffs)
 ```
 
 
 ```{r calibrate-mapping}
-#| code-fold: true
-#| code-summary: "Map creation with tmap"
-
-
 tm_shape(expected_perf$AOA$expected_RMSE)+
     tm_raster(title = "Expected \nRMSE",style = "cont", legend.reverse = TRUE, palette = mako(50, direction = -1))+
     tm_shape(expected_perf$AOA$AOA)+
