@@ -49,7 +49,7 @@ rm(CWM_CWV.oa, DT2.oa, header.oa, metadata.oa, reference.oa, sPlotOpen_citation)
 ```{r}
 # define region: all of south america
 modeldomain = rnaturalearth::ne_countries(continent = "South America", returnclass = "sf", scale = 110)
-
+modeldomain = st_transform(modeldomain, st_crs(splot))
 # download or load worldclim for prediction
 wc = geodata::worldclim_global(var = "bio", res = 5, path = "raw/")
 elev = geodata::elevation_global(res = 5, path = "raw/")

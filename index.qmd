@@ -30,14 +30,15 @@ library(ranger)
 library(tmap)
 library(viridis)
 library(scales)
+library(ggpubr)
 
 ```
 
-## Example data and modelling task
+### Example data
 
 ```{r data}
 ## Wording from now on:
-# reference_samples: predictors + response + coordinates + metadata
+# reference_points: predictors + response + coordinates + metadata
 # training_data: reference samples without coordinates
 # predictors: spatially continuous predictor stack
 # modeldomain: where we want to predict (the outline of South America)
@@ -46,24 +47,55 @@ library(scales)
 
 
 predictors <- rast("data/predictors.tif")
-reference_samples <- st_read("data/training_data.gpkg")
-training_data <- reference_samples |> st_drop_geometry() # reference samples without coordinates
+reference_points <- st_read("data/training_data.gpkg")
+training_data <- reference_points |> st_drop_geometry() # reference samples without coordinates
 modeldomain <- st_read("data/modeldomain.gpkg")
+
+
+
+### Patch: less predictors
+p = c("bio_1", "bio_4", "bio_5", "bio_6", "bio_8", "bio_9", "bio_12", "bio_13", "bio_14", "bio_15", "elev")
+predictors = predictors[[p]]
 
 predictor_names <- names(predictors)
 response_name <- "Species_richness"
+
+# define color palette
+Okabe_Ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#CC79A7") 
 ```
 
 
-```{r}
-predictors
-head(training_data)
+```{r response}
+tm_shape(modeldomain)+
+    tm_borders()+
+    tm_shape(reference_points)+
+    tm_symbols(col = "Species_richness", style = "cont",
+               legend.col.reverse = TRUE,
+               palette = plasma(50, direction = -1),
+               size = 0.2, title.col = "Species richness")+
+    tm_layout(frame = FALSE)
+```
+
+
+```{r predictors}
+p = predictors[[c("bio_4", "bio_12", "bio_8", "elev")]]
+names(p) = c("Temp. Seasonality", "Annual Precipitation", "Temp. wettest quarter", "Elevation")
+
+tm_shape(p)+
+    tm_raster(style = "cont", title = "", legend.reverse = TRUE)+
+    tm_facets(free.scales = TRUE, ncol = 2)+
+    tm_layout(legend.position = c("right", "bottom"),
+              legend.just = "left",
+              panel.show = TRUE,
+              panel.labels = names(p),
+              panel.label.bg.color = NA,
+              frame.lwd = NA,
+              frame = FALSE)
 ```
 
 
 
-
-### A simple prediction model
+## A first simple prediction model
 
 ```{r rcv-model}
 set.seed(6502)
@@ -71,43 +103,17 @@ rfmodel_rcv <- caret::train(x = training_data |> select(all_of(predictor_names))
                             y = training_data |> pull(response_name),
                             method = "ranger",
                             num.trees = 100,
-                            trControl = trainControl(method = "cv"))
+                            trControl = trainControl(method = "cv",
+                                                     savePredictions = TRUE))
 
-r <- ranger(x = training_data |> select(all_of(predictor_names)),
-                            y = training_data |> pull(response_name), num.trees = 100,  importance = "permutation")
-
-prediction <- predict(rfmodel_rcv, predictors, na.rm = TRUE)
-
-
+prediction_rcv <- predict(predictors, rfmodel_rcv, na.rm = TRUE)
 ```
 
-
-```{r}
-tm_shape(prediction)+
-    tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
-              palette = mako(50, begin = 0.2),
-              legend.reverse = TRUE)+
-        tm_layout(legend.position = c("right", "bottom"),
-              legend.just = "left",
-              frame = FALSE)
-```
-
-
-
-
-
-### First prediction of Species Richness
 
 ```{r rcv-prediction}
-rcv_prediction = predict(predictors, rfmodel_rcv, na.rm = TRUE)
-```
-
-```{r rcv-mapping}
 #| code-fold: true
-#| code-summary: "Map creation with tmap"
-
-
-tm_shape(rcv_prediction)+
+#| code-summary: "knndm-cv visualization with tmap and ggplot2"
+tm_shape(prediction_rcv)+
     tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
               palette = mako(50, begin = 0.2),
               legend.reverse = TRUE)+
@@ -118,21 +124,20 @@ tm_shape(rcv_prediction)+
 
 
 
-
-### The problem
-
-* distance between reference samples and prediction domain is large
-* random CV does not represent actual prediction task
-* standard validation approach is not sufficient
+## Cross-validation to estimate the map accuracy
 
 
 ```{r geodist}
-rcv_geodist = plot_geodist(plots, modeldomain, unit = "km", showPlot = FALSE)
-rcv_geodist$plot + scale_x_log10() + theme_light()
+geo_distance = plot_geodist(reference_points, modeldomain, showPlot = FALSE)
+geo_distance$plot + 
+    scale_y_continuous(expand = c(0,0))+
+    scale_x_continuous(expand = c(0,0),
+                       trans = "log10",
+                       labels = trans_format("log10", math_format(10^.x)))+
+    theme_light()+
+    theme(legend.position = "bottom")
 ```
 
-
-## Part 2: Map accuracy via spatial cross-validation (cv)
 
 ### Setting up knndm-cv
 
@@ -140,34 +145,72 @@ rcv_geodist$plot + scale_x_log10() + theme_light()
 * cv more representative of actual prediction task
 
 ```{r knndm-setup}
-knn_setup = CAST::knndm(tpoints = st_transform(plots, 4326),
-                        modeldomain = st_transform(modeldomain, 4326), 
-                        samplesize = 4000, k = 10)
-plots$fold = knn_setup$clusters
+knndm_folds = CAST::knndm(tpoints = reference_points,
+                        modeldomain = modeldomain, 
+                        samplesize = 4000, k = 5)
 
-plot(knn_setup)
+reference_points$fold = knndm_folds$clusters
+reference_points$random_fold = sample(seq(5),
+                                      size = nrow(reference_points),
+                                      replace = TRUE) ## imitating a random 5 fold cross validation
 ```
 
-
-```{r knndm-geodistance}
+```{r rcv-plots}
 #| code-fold: true
 #| code-summary: "knndm-cv visualization with tmap and ggplot2"
 #| layout-ncol: 2
 
+
 tm_shape(modeldomain)+
     tm_borders()+
-    tm_shape(plots)+
+    tm_shape(reference_points)+
+    tm_symbols(col = "random_fold", style = "cat",
+               legend.col.reverse = FALSE,
+               palette = Okabe_Ito,
+               size = 0.2, title.col = "Random Folds",
+               legend.col.is.portrait = FALSE)+
+    tm_layout(frame = FALSE)
+
+
+
+plot_geodist(reference_points,
+                  modeldomain,
+                  cvfolds = reference_points$random_fold,
+                  showPlot = FALSE)
+plot_rcv = gd_rcv$plot + 
+    scale_y_continuous(expand = c(0,0))+
+    scale_x_continuous(expand = c(0,0),
+                       trans = "log10",
+                       labels = trans_format("log10", math_format(10^.x)))+
+    theme_light()+
+    theme(legend.position = "bottom")
+
+
+rcv_ecdf <- plot_geodist(reference_points, modeldomain, cvfolds = reference_points$random_fold, stat = "ecdf", showPlot = FALSE)
+rcv_ecdf$plot + 
+  scale_x_continuous(limits = c(0,1500000))+
+  theme_light()+
+  theme(legend.position = "bottom")
+
+```
+
+
+```{r knndm-plots}
+tm_shape(modeldomain)+
+    tm_borders()+
+    tm_shape(reference_points)+
     tm_symbols(col = "fold", style = "cat",
                legend.col.reverse = FALSE,
+               palette = Okabe_Ito,
                size = 0.2, title.col = "knndm Folds",
                legend.col.is.portrait = FALSE)+
     tm_layout(frame = FALSE)
 
 
 
-gd = plot_geodist(plots,
+gd = plot_geodist(reference_points,
                   modeldomain,
-                  cvfolds = plots$fold,
+                  cvfolds = reference_points$fold,
                   showPlot = FALSE)
 gd$plot + 
     scale_y_continuous(expand = c(0,0))+
@@ -176,6 +219,14 @@ gd$plot +
                        labels = trans_format("log10", math_format(10^.x)))+
     theme_light()+
     theme(legend.position = "bottom")
+
+
+knndmcv_ecdf <- plot_geodist(reference_points, modeldomain, cvfolds = knndm_folds$clusters, stat = "ecdf", showPlot = FALSE)
+knndmcv_ecdf$plot + 
+  scale_x_continuous(limits = c(0,1500000))+
+  theme_light()+
+  theme(legend.position = "bottom")
+
 
 ```
 
@@ -186,50 +237,76 @@ gd$plot +
 ### Random Forest Model with knndm-cv
 
 ```{r knndm-model}
+
+tr_control <- trainControl(method = "cv",
+                         number = 5,
+                         index = knndm_folds$indx_train,
+                         savePredictions = TRUE)
+
+
 set.seed(51)
-rfmodel_knndmcv = caret::train(x = training_data |> select(all_of(predictor_names)),
-                           y = training_data |> pull(response_name),
+rfmodel_knndmcv <- caret::train(x = training_data[,predictor_names],
+                           y = training_data[,response_name],
                            method = "ranger",
                            num.trees = 100,
-                           trControl = trainControl(method = "cv",
-                                                    index = knn_setup$indx_train,
-                                                    indexOut = knn_setup$indx_test,
-                                                    savePredictions = "final"),
-                           importance = "permutation")
+                           trControl = tr_control)
 
 global_validation(rfmodel_knndmcv)
-```
 
-
-* prediction results should be very similar to before since we only changes the validation strategy, not the model itself
-
-
-
-```{r knndm-prediction}
-knndmcv_prediction = predict(predictors, rfmodel_knndmcv, na.rm = TRUE)
-```
-
-
-## Part 3: Evaluating the Area of Applicability
-
-
-### Dissimilarity between reference samples
-
-```{r knndm-trainDI}
-
-knndmcv_trainDI = trainDI(rfmodel_knndmcv)
-knndmcv_trainDI
-
-plot(knndmcv_trainDI)
 ```
 
 
 
-### From dissimilarity to area of applicability
+## Spatial model tuning and feature selection
+
+
+* simplify the model by selecting predictors based on their performance in new regions
+* new regions are defined by spatial cv folds (here knndm approach)
+* runtime ~ 10 min
+
+
+```{r ffs}
+set.seed(65)
+rfmodel_ffs <- CAST::ffs(training_data[,predictor_names],
+                         training_data[,response_name],
+                         method = "ranger",
+                         importance = "permutation",
+                         num.trees = 100,
+                         trControl = tr_control)
+prediction_ffs <- predict(predictors, rfmodel_ffs, na.rm = TRUE)
+global_validation(rfmodel_ffs)
+plot(rfmodel_ffs, plotType = "selected")
+
+```
+
+
+
+```{r ffs-prediction}
+
+tm_shape(prediction_ffs)+
+    tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
+              palette = mako(50, begin = 0.2),
+              legend.reverse = TRUE)+
+        tm_layout(legend.position = c("right", "bottom"),
+              legend.just = "left",
+              frame = FALSE)
+```
+
+
+```{r ffs-selected}
+
+# TODO
+
+
+```
+
+
+
+## Assessment of the area of applicability
+
 
 ```{r knndm-aoa}
-aoa_knndmcv = CAST::aoa(predictors, model = rfmodel_knndmcv, trainDI = knndmcv_trainDI)
-plot(aoa_knndmcv)
+AOA = CAST::aoa(predictors, model = rfmodel_ffs)
 ```
 
 
@@ -237,19 +314,18 @@ plot(aoa_knndmcv)
 #| code-fold: true
 #| code-summary: "Map creation with tmap"
 
-tm_shape(aoa_knndmcv$DI)+
-    tm_raster(palette = viridis(50), style = "cont", legend.reverse = TRUE, breaks = c(0,0.1,0.368,0.5,1))+
+tm_shape(AOA$DI)+
+    tm_raster(palette = viridis(50), style = "cont", legend.reverse = TRUE, breaks = c(0,0.1,0.282,0.5,1))+
             tm_layout(legend.position = c("right", "bottom"),
               legend.just = "left",
               frame = FALSE)
 
 
-
-tm_shape(knndmcv_prediction)+
+tm_shape(prediction_ffs)+
     tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
               palette = mako(50, begin = 0.2),
               legend.reverse = TRUE)+
-    tm_shape(aoa_knndmcv$AOA)+
+    tm_shape(AOA$AOA)+
     tm_raster(palette = c("1" = NA, "0" = "darkgoldenrod1"), style = "cat", legend.show = FALSE)+
     tm_add_legend(type = "fill", col = "darkgoldenrod1", border.lwd = 0,labels = "Outside AOA")+
         tm_layout(legend.position = c("right", "bottom"),
@@ -258,85 +334,6 @@ tm_shape(knndmcv_prediction)+
 ```
 
 
-
-## Part 4: Spatial Variable Selection
-
-
-* simplify the model by selecting predictors based on their performance in new regions
-* new regions are defined by spatial cv folds (here knndm approach)
-
-```{r ffs-model}
-#| eval: true
-#| cache: true
-
-set.seed(2516)
-ffs_knndmcv = CAST::ffs(predictors = training_data |> select(all_of(predictor_names)),
-                      response = training_data |> pull(response_name),
-                      method = "ranger",
-                      num.trees = 100,
-                      minVar = 2,
-                      tuneGrid = expand.grid(splitrule = "variance",
-                                             mtry = 2,
-                                             min.node.size = 5),
-                      trControl = trainControl(method = "cv",
-                                               number = 10,
-                                               index = knn_setup$indx_train,
-                                               indexOut = knn_setup$indx_test,
-                                               savePredictions = "final"),
-                      importance = "permutation",
-                      verbose = FALSE)
-
-```
-
-
-### Selected Variables
-
-
-```{r ffs-selectedvars}
-#| code-fold: true
-#| code-summary: "Plot Selected Variables and Performance"
-
-
-selectedVars = ffs_knndmcv$selectedvars
-
-# extract info from FFS
-df = data.frame(Variables = factor(c(paste(selectedVars[1], selectedVars[2], sep = " + "), paste0("+ ", selectedVars[c(-1,-2)])),
-                                     levels = c(paste(selectedVars[1], selectedVars[2], sep = " + "), paste0("+ ", selectedVars[c(-1,-2)]))),
-                  Performance = ffs_knndmcv$selectedvars_perf,
-                  Performance_SE = ffs_knndmcv$selectedvars_perf_SE,
-                  Improvement = ffs_knndmcv$selectedvars_perf[lag(1:length(ffs_knndmcv$selectedvars_perf))] - ffs_knndmcv$selectedvars_perf)
-
-# create plot
-ggplot(df, aes(x = Performance, y = Variables))+
-  geom_point()+
-  geom_segment(aes(y = Variables,
-                   yend = Variables,
-                    x = Performance - Performance_SE,
-                    xend = Performance + Performance_SE))+
-  scale_y_discrete(name = NULL,limits=rev)+
-  scale_x_continuous(name = "RMSE", limits=rev)+
-  theme_light()+
-  theme(panel.grid.major.y = element_blank(),
-        axis.text = element_text(color = "black", size = 10))
-```
-
-
-```{r ffs-mapping}
-#| code-fold: true
-#| code-summary: "Map creation with tmap"
-
-
-ffs_prediction = predict(predictors, ffs_knndmcv, na.rm = TRUE)
-
-tm_shape(ffs_prediction)+
-    tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
-              palette = mako(50, begin = 0.2),
-              legend.reverse = TRUE)+
-        tm_layout(legend.position = c("right", "bottom"),
-              legend.just = "left",
-              frame = FALSE)
-
-```
 
 
 
@@ -345,35 +342,26 @@ tm_shape(ffs_prediction)+
 #| code-fold: true
 #| code-summary: "Compare Model Results"
 
-
-
-
 cv_results = rbind(global_validation(rfmodel_rcv),
     global_validation(rfmodel_knndmcv),
-    global_validation(ffs_knndmcv)) |> 
+    global_validation(rfmodel_ffs)) |> 
     as.data.frame() |> mutate("CV" = c("random", "knndm", "knndm"),
                               "predictors" = c(ncol(rfmodel_rcv$trainingData)-1,
                                                ncol(rfmodel_knndmcv$trainingData)-1, 
-                                               ncol(ffs_knndmcv$trainingData)-1))
+                                               ncol(rfmodel_ffs$trainingData)-1))
 knitr::kable(cv_results)
 ```
 
 
 
 
-## Part 5: Spatially Explicit Error Mapping
-
-* translating the DI to RMSE
-* maximizing AOA by feature space cluster cv
-
+## Pixel-wise performance estimation
 
 ```{r calibrate}
 #| eval: true
 #| cache: true
-aoa_ffs = aoa(predictors, model = ffs_knndmcv)
-
 set.seed(10)
-ffs_calib = calibrate_aoa(aoa_ffs, model = ffs_knndmcv, multiCV = TRUE, length.out = 6)
+expected_perf = calibrate_aoa(AOA, rfmodel_ffs)
 ```
 
 
@@ -382,21 +370,9 @@ ffs_calib = calibrate_aoa(aoa_ffs, model = ffs_knndmcv, multiCV = TRUE, length.o
 #| code-summary: "Map creation with tmap"
 
 
-tm_shape(ffs_prediction)+
-    tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
-              palette = mako(50, begin = 0.2),
-              legend.reverse = TRUE)+
-    tm_shape(ffs_calib$AOA$AOA)+
-    tm_raster(palette = c("1" = NA, "0" = "darkgoldenrod1"), style = "cat", legend.show = FALSE)+
-    tm_add_legend(type = "fill", col = "darkgoldenrod1", border.lwd = 0,labels = "Outside AOA")+
-        tm_layout(legend.position = c("right", "bottom"),
-              legend.just = "left",
-              frame = FALSE)
-
-
-tm_shape(ffs_calib$AOA$expected_RMSE)+
+tm_shape(expected_perf$AOA$expected_RMSE)+
     tm_raster(title = "Expected \nRMSE",style = "cont", legend.reverse = TRUE, palette = mako(50, direction = -1))+
-    tm_shape(ffs_calib$AOA$AOA)+
+    tm_shape(expected_perf$AOA$AOA)+
     tm_raster(palette = c("1" = NA, "0" = "darkgoldenrod1"), style = "cat", legend.show = FALSE)+
     tm_add_legend(type = "fill", col = "darkgoldenrod1", border.lwd = 0,labels = "Outside AOA")+
             tm_layout(legend.position = c("right", "bottom"),
