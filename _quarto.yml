@@ -3,14 +3,20 @@ project:
   output-dir: docs
   render: 
     - index.qmd
-
 website:
   title: "CAST4Ecology"
+  description: "Reproducible Figures for the book chapter"
+  repo-url: https://github.com/LOEK-RS/CAST4ecology
   navbar:
     left:
       - href: index.qmd
         text: CAST4Ecology
-
+    right:
+      - icon: github
+        href: https://github.com/LOEK-RS/CAST4ecology
+        aria-label: GitHub
+      - href: https://hannameyer.github.io/CAST/
+        text: "The CAST Package"
 format:
   html:
     theme: cosmo

@@ -42,3 +42,5 @@ vignettes/*.pdf
 
 raw/
 trash/
+index_cache/
+index_files/

@@ -48,15 +48,11 @@ library(ggpubr)
 
 
 predictors <- rast("data/predictors.tif")
-reference_points <- st_read("data/training_data.gpkg", quiet = TRUE)
+reference_points <- st_read("data/reference_samples.gpkg", quiet = TRUE)
 training_data <- reference_points |> st_drop_geometry() # reference samples without coordinates
 modeldomain <- st_read("data/modeldomain.gpkg", quiet = TRUE)
 
 
-
-### Patch: less predictors
-p = c("bio_1", "bio_4", "bio_5", "bio_6", "bio_8", "bio_9", "bio_12", "bio_13", "bio_14", "bio_15", "elev")
-predictors = predictors[[p]]
 
 predictor_names <- names(predictors)
 response_name <- "Species_richness"
@@ -154,7 +150,7 @@ reference_points$random_fold = sample(seq(5),
                                       replace = TRUE) ## imitating a random 5 fold cross validation
 ```
 
-```{r rcv-plots}
+```{r rcv-map}
 tm_shape(modeldomain)+
     tm_borders()+
     tm_shape(reference_points)+
@@ -164,8 +160,11 @@ tm_shape(modeldomain)+
                size = 0.2, title.col = "Random Folds",
                legend.col.is.portrait = FALSE)+
     tm_layout(frame = FALSE)
+```
 
 
+```{r rcv-plots}
+#| layout-ncol: 2
 
 gd_rcv <- plot_geodist(reference_points,
                   modeldomain,
@@ -189,7 +188,7 @@ rcv_ecdf$plot +
 ```
 
 
-```{r knndm-plots}
+```{r knndm-map}
 tm_shape(modeldomain)+
     tm_borders()+
     tm_shape(reference_points)+
@@ -199,8 +198,11 @@ tm_shape(modeldomain)+
                size = 0.2, title.col = "knndm Folds",
                legend.col.is.portrait = FALSE)+
     tm_layout(frame = FALSE)
+```
 
 
+```{r knndm-plots}
+#| layout-ncol: 2
 
 gd = plot_geodist(reference_points,
                   modeldomain,
@@ -265,12 +267,29 @@ rfmodel_ffs <- CAST::ffs(training_data[,predictor_names],
                          num.trees = 100,
                          trControl = tr_control,
                          verbose = FALSE)
+
 prediction_ffs <- predict(predictors, rfmodel_ffs, na.rm = TRUE)
 ```
 
 
 
+```{r model-comparison}
+cv_results = rbind(global_validation(rfmodel_rcv),
+    global_validation(rfmodel_knndmcv),
+    global_validation(rfmodel_ffs)) |> 
+    as.data.frame() |> mutate("CV" = c("random", "knndm", "knndm"),
+                              "predictors" = c(ncol(rfmodel_rcv$trainingData)-1,
+                                               ncol(rfmodel_knndmcv$trainingData)-1, 
+                                               ncol(rfmodel_ffs$trainingData)-1))
+knitr::kable(cv_results)
+```
+
+
+
+
 ```{r ffs-prediction}
+
+
 
 tm_shape(prediction_ffs)+
     tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
@@ -283,20 +302,22 @@ tm_shape(prediction_ffs)+
 
 
 ```{r ffs-selected}
-plot_df = data.frame(labels = c(paste(rfmodel_ffs$selectedvars[1:rfmodel_ffs$minVar], collapse = "\n"),
-                                    paste(rfmodel_ffs$selectedvars[-1:-rfmodel_ffs$minVar], sep = "+")),
+plot_df = data.frame(labels = fct_rev(fct_inorder(c(paste(rfmodel_ffs$selectedvars[1:rfmodel_ffs$minVar], collapse = "\n + "),
+                                    paste("+", rfmodel_ffs$selectedvars[-1:-rfmodel_ffs$minVar], sep = " ")))),
                          perf = rfmodel_ffs$selectedvars_perf,
                          perfse = rfmodel_ffs$selectedvars_perf_SE)
 
-    par(mar = c(5,5,5,10))
-    bp = barplot(plot_df$perf, horiz = TRUE, names.arg = plot_df$labels, beside = T,
-                 xlim = c(0, max(plot_df$perf + plot_df$perfse)),
-                 xlab = "RMSE")
-    arrows(y0 = bp,
-           y1 = bp,
-           x0 = plot_df$perf - plot_df$perfse,
-           x1 = plot_df$perf + plot_df$perfse,
-           angle=90, code=3)
+
+ggplot(plot_df, aes(x = perf, y = labels))+
+  geom_point()+
+  geom_segment(aes(x = perf - perfse, xend = perf + perfse,
+                   y = labels, yend = labels))+
+  scale_x_continuous(name = "RMSE")+
+  scale_y_discrete(name = "")+
+  theme_light()+
+  theme(panel.grid.major.y = element_blank(),
+        axis.text = element_text(color = "black", size = 10))
+
 ```
 
 
@@ -333,16 +354,7 @@ tm_shape(prediction_ffs)+
 
 
 
-```{r model-comparison}
-cv_results = rbind(global_validation(rfmodel_rcv),
-    global_validation(rfmodel_knndmcv),
-    global_validation(rfmodel_ffs)) |> 
-    as.data.frame() |> mutate("CV" = c("random", "knndm", "knndm"),
-                              "predictors" = c(ncol(rfmodel_rcv$trainingData)-1,
-                                               ncol(rfmodel_knndmcv$trainingData)-1, 
-                                               ncol(rfmodel_ffs$trainingData)-1))
-knitr::kable(cv_results)
-```
+
 
 
 
@@ -350,7 +362,7 @@ knitr::kable(cv_results)
 ## Pixel-wise performance estimation
 
 ```{r calibrate}
-set.seed(10)
+set.seed(5)
 expected_perf = calibrate_aoa(AOA, rfmodel_ffs)
 ```
 
