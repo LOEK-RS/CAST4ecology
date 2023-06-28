@@ -3,7 +3,7 @@ title: "CAST4Ecology Modelling Tutorial"
 execute: 
   warning: false
   message: false
-  cache: true
+  cache: false
 ---
 
 
@@ -38,18 +38,19 @@ library(ggpubr)
 ### Example data
 
 ```{r data}
-## Wording from now on:
-# reference_points: predictors + response + coordinates + metadata
+## Wording:
 # training_data: reference samples without coordinates
-# predictors: spatially continuous predictor stack
+# predictors: spatially continuous predictor stack of South America
 # modeldomain: where we want to predict (the outline of South America)
 # predictor_names: names of predictors in the training_data and the predictor stack
 # response_name: name of the response variable in plots
 
 
+
+data(splotdata) # load reference samples (example data from the CAST package)
+
 predictors <- rast("data/predictors.tif")
-reference_points <- st_read("data/reference_samples.gpkg", quiet = TRUE)
-training_data <- reference_points |> st_drop_geometry() # reference samples without coordinates
+training_data <- splotdata |> st_drop_geometry() # reference samples without coordinates
 modeldomain <- st_read("data/modeldomain.gpkg", quiet = TRUE)
 
 
@@ -65,7 +66,7 @@ Okabe_Ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#CC79A7")
 ```{r response}
 tm_shape(modeldomain)+
     tm_borders()+
-    tm_shape(reference_points)+
+    tm_shape(splotdata)+
     tm_symbols(col = "Species_richness", style = "cont",
                legend.col.reverse = TRUE,
                palette = plasma(50, direction = -1),
@@ -123,8 +124,9 @@ tm_shape(prediction_rcv)+
 
 
 ```{r geodist}
-geo_distance = plot_geodist(reference_points, modeldomain, showPlot = FALSE)
-geo_distance$plot + 
+geo_distance = geodist(splotdata, modeldomain)
+
+plot(geo_distance) + 
     scale_y_continuous(expand = c(0,0))+
     scale_x_continuous(expand = c(0,0),
                        trans = "log10",
@@ -140,20 +142,20 @@ geo_distance$plot +
 * cv more representative of actual prediction task
 
 ```{r knndm-setup}
-knndm_folds = CAST::knndm(tpoints = reference_points,
-                        modeldomain = modeldomain, 
-                        samplesize = 4000, k = 5)
+knndm_folds = CAST::knndm(tpoints = splotdata,
+                          modeldomain = modeldomain, 
+                          samplesize = 4000, k = 5)
 
-reference_points$fold = knndm_folds$clusters
-reference_points$random_fold = sample(seq(5),
-                                      size = nrow(reference_points),
-                                      replace = TRUE) ## imitating a random 5 fold cross validation
+splotdata$fold = knndm_folds$clusters
+splotdata$random_fold = sample(seq(5),
+                               size = nrow(splotdata),
+                               replace = TRUE) ## imitating a random 5 fold cross validation
 ```
 
 ```{r rcv-map}
 tm_shape(modeldomain)+
     tm_borders()+
-    tm_shape(reference_points)+
+    tm_shape(splotdata)+
     tm_symbols(col = "random_fold", style = "cat",
                legend.col.reverse = FALSE,
                palette = Okabe_Ito,
@@ -166,11 +168,10 @@ tm_shape(modeldomain)+
 ```{r rcv-plots}
 #| layout-ncol: 2
 
-gd_rcv <- plot_geodist(reference_points,
+gd_rcv <- geodist(splotdata,
                   modeldomain,
-                  cvfolds = reference_points$random_fold,
-                  showPlot = FALSE)
-plot_rcv = gd_rcv$plot + 
+                  cvfolds = splotdata$random_fold)
+plot(gd_rcv, stat = "density") + 
     scale_y_continuous(expand = c(0,0))+
     scale_x_continuous(expand = c(0,0),
                        trans = "log10",
@@ -178,9 +179,7 @@ plot_rcv = gd_rcv$plot +
     theme_light()+
     theme(legend.position = "bottom")
 
-
-rcv_ecdf <- plot_geodist(reference_points, modeldomain, cvfolds = reference_points$random_fold, stat = "ecdf", showPlot = FALSE)
-rcv_ecdf$plot + 
+plot(gd_rcv, stat = "ecdf") +
   scale_x_continuous(limits = c(0,1500000))+
   theme_light()+
   theme(legend.position = "bottom")
@@ -191,7 +190,7 @@ rcv_ecdf$plot +
 ```{r knndm-map}
 tm_shape(modeldomain)+
     tm_borders()+
-    tm_shape(reference_points)+
+    tm_shape(splotdata)+
     tm_symbols(col = "fold", style = "cat",
                legend.col.reverse = FALSE,
                palette = Okabe_Ito,
@@ -204,11 +203,10 @@ tm_shape(modeldomain)+
 ```{r knndm-plots}
 #| layout-ncol: 2
 
-gd = plot_geodist(reference_points,
-                  modeldomain,
-                  cvfolds = reference_points$fold,
-                  showPlot = FALSE)
-gd$plot + 
+gd_knndm <- geodist(splotdata,
+                    modeldomain,
+                    cvfolds = splotdata$fold)
+plot(gd_knndm, stat = "density") + 
     scale_y_continuous(expand = c(0,0))+
     scale_x_continuous(expand = c(0,0),
                        trans = "log10",
@@ -217,13 +215,10 @@ gd$plot +
     theme(legend.position = "bottom")
 
 
-knndmcv_ecdf <- plot_geodist(reference_points, modeldomain, cvfolds = knndm_folds$clusters, stat = "ecdf", showPlot = FALSE)
-knndmcv_ecdf$plot + 
+plot(gd_knndm, stat = "ecdf")+ 
   scale_x_continuous(limits = c(0,1500000))+
   theme_light()+
   theme(legend.position = "bottom")
-
-
 ```
 
 
@@ -258,6 +253,7 @@ rfmodel_knndmcv <- caret::train(x = training_data[,predictor_names],
 
 
 ```{r ffs}
+#| cache: true
 #| output: false
 set.seed(62)
 rfmodel_ffs <- CAST::ffs(training_data[,predictor_names],
@@ -268,12 +264,13 @@ rfmodel_ffs <- CAST::ffs(training_data[,predictor_names],
                          trControl = tr_control,
                          verbose = FALSE)
 
-prediction_ffs <- predict(predictors, rfmodel_ffs, na.rm = TRUE)
+
 ```
 
 
 
 ```{r model-comparison}
+prediction_ffs <- predict(predictors, rfmodel_ffs, na.rm = TRUE)
 cv_results = rbind(global_validation(rfmodel_rcv),
     global_validation(rfmodel_knndmcv),
     global_validation(rfmodel_ffs)) |> 
@@ -288,9 +285,6 @@ knitr::kable(cv_results)
 
 
 ```{r ffs-prediction}
-
-
-
 tm_shape(prediction_ffs)+
     tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
               palette = mako(50, begin = 0.2),
@@ -302,22 +296,10 @@ tm_shape(prediction_ffs)+
 
 
 ```{r ffs-selected}
-plot_df = data.frame(labels = fct_rev(fct_inorder(c(paste(rfmodel_ffs$selectedvars[1:rfmodel_ffs$minVar], collapse = "\n + "),
-                                    paste("+", rfmodel_ffs$selectedvars[-1:-rfmodel_ffs$minVar], sep = " ")))),
-                         perf = rfmodel_ffs$selectedvars_perf,
-                         perfse = rfmodel_ffs$selectedvars_perf_SE)
-
-
-ggplot(plot_df, aes(x = perf, y = labels))+
-  geom_point()+
-  geom_segment(aes(x = perf - perfse, xend = perf + perfse,
-                   y = labels, yend = labels))+
-  scale_x_continuous(name = "RMSE")+
-  scale_y_discrete(name = "")+
+plot(rfmodel_ffs, plotType = "selected")+
   theme_light()+
   theme(panel.grid.major.y = element_blank(),
         axis.text = element_text(color = "black", size = 10))
-
 ```
 
 
@@ -349,12 +331,6 @@ tm_shape(prediction_ffs)+
               legend.just = "left",
               frame = FALSE)
 ```
-
-
-
-
-
-
 
 
 
