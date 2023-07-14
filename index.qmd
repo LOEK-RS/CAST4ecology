@@ -6,7 +6,7 @@ execute:
   cache: false
 ---
 
-
+This is a reproducible code to create the figures of the book chapter CAST4Ecology.
 
 
 ## Preparations
@@ -124,6 +124,11 @@ tm_shape(prediction_rcv)+
 
 
 ```{r geodist}
+#| fig-width: 6
+#| fig-height: 6
+#| layout-ncol: 2
+
+
 geo_distance = geodist(splotdata, modeldomain)
 
 plot(geo_distance) + 
@@ -133,6 +138,13 @@ plot(geo_distance) +
                        labels = trans_format("log10", math_format(10^.x)))+
     theme_light()+
     theme(legend.position = "bottom")
+
+
+plot(geo_distance, stat = "ecdf")+
+  scale_x_continuous(expand = c(0,0))+
+  theme_light()+
+  theme(legend.position = "bottom")
+
 ```
 
 
@@ -143,8 +155,7 @@ plot(geo_distance) +
 
 ```{r knndm-setup}
 knndm_folds = CAST::knndm(tpoints = splotdata,
-                          modeldomain = modeldomain, 
-                          samplesize = 4000, k = 5)
+                          modeldomain = modeldomain, k = 5)
 
 splotdata$fold = knndm_folds$clusters
 splotdata$random_fold = sample(seq(5),
@@ -153,6 +164,7 @@ splotdata$random_fold = sample(seq(5),
 ```
 
 ```{r rcv-map}
+#| fig-height: 6
 tm_shape(modeldomain)+
     tm_borders()+
     tm_shape(splotdata)+
@@ -167,10 +179,13 @@ tm_shape(modeldomain)+
 
 ```{r rcv-plots}
 #| layout-ncol: 2
+#| fig-width: 6
+#| fig-height: 6
 
 gd_rcv <- geodist(splotdata,
                   modeldomain,
                   cvfolds = splotdata$random_fold)
+
 plot(gd_rcv, stat = "density") + 
     scale_y_continuous(expand = c(0,0))+
     scale_x_continuous(expand = c(0,0),
@@ -180,7 +195,7 @@ plot(gd_rcv, stat = "density") +
     theme(legend.position = "bottom")
 
 plot(gd_rcv, stat = "ecdf") +
-  scale_x_continuous(limits = c(0,1500000))+
+  scale_x_continuous(limits = c(0,1500000), expand = c(0,0))+
   theme_light()+
   theme(legend.position = "bottom")
 
@@ -188,6 +203,7 @@ plot(gd_rcv, stat = "ecdf") +
 
 
 ```{r knndm-map}
+#| fig-height: 6
 tm_shape(modeldomain)+
     tm_borders()+
     tm_shape(splotdata)+
@@ -202,10 +218,13 @@ tm_shape(modeldomain)+
 
 ```{r knndm-plots}
 #| layout-ncol: 2
+#| fig-width: 6
+#| fig-height: 6
 
 gd_knndm <- geodist(splotdata,
                     modeldomain,
                     cvfolds = splotdata$fold)
+
 plot(gd_knndm, stat = "density") + 
     scale_y_continuous(expand = c(0,0))+
     scale_x_continuous(expand = c(0,0),
@@ -263,9 +282,27 @@ rfmodel_ffs <- CAST::ffs(training_data[,predictor_names],
                          num.trees = 100,
                          trControl = tr_control,
                          verbose = FALSE)
+```
+
+
+
+
+```{r}
+# test simplified model with random CV 
+set.seed(5)
+rfmodel_ffs_random =  caret::train(x = training_data |> select(all_of(rfmodel_ffs$selectedvars)),
+                            y = training_data |> pull(response_name),
+                            method = "ranger",
+                            num.trees = 100,
+                            trControl = trainControl(method = "cv",
+                                                     savePredictions = TRUE))
+global_validation(rfmodel_ffs_random)
 
 
 ```
+
+
+
 
 
 
@@ -273,11 +310,13 @@ rfmodel_ffs <- CAST::ffs(training_data[,predictor_names],
 prediction_ffs <- predict(predictors, rfmodel_ffs, na.rm = TRUE)
 cv_results = rbind(global_validation(rfmodel_rcv),
     global_validation(rfmodel_knndmcv),
-    global_validation(rfmodel_ffs)) |> 
-    as.data.frame() |> mutate("CV" = c("random", "knndm", "knndm"),
+    global_validation(rfmodel_ffs),
+    global_validation(rfmodel_ffs_random)) |> 
+    as.data.frame() |> mutate("CV" = c("random", "knndm", "knndm", "random"),
                               "predictors" = c(ncol(rfmodel_rcv$trainingData)-1,
                                                ncol(rfmodel_knndmcv$trainingData)-1, 
-                                               ncol(rfmodel_ffs$trainingData)-1))
+                                               ncol(rfmodel_ffs$trainingData)-1,
+                                               paste0(ncol(rfmodel_ffs$trainingData)-1, "*")))
 knitr::kable(cv_results)
 ```
 
@@ -285,6 +324,7 @@ knitr::kable(cv_results)
 
 
 ```{r ffs-prediction}
+#| fig-height: 6
 tm_shape(prediction_ffs)+
     tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
               palette = mako(50, begin = 0.2),
@@ -296,6 +336,8 @@ tm_shape(prediction_ffs)+
 
 
 ```{r ffs-selected}
+#| fig-height: 6
+#| fig-width: 6
 plot(rfmodel_ffs, plotType = "selected")+
   theme_light()+
   theme(panel.grid.major.y = element_blank(),
@@ -312,9 +354,18 @@ AOA = CAST::aoa(predictors, model = rfmodel_ffs)
 ```
 
 
+```{r aoa-plot}
+plot(AOA)+
+  scale_x_continuous(expand = c(0,0))
+```
+
+
+
+
 ```{r knndm-mapping}
+#| fig-height: 6
 tm_shape(AOA$DI)+
-    tm_raster(palette = viridis(50), style = "cont", legend.reverse = TRUE, breaks = c(0,0.1,0.282,0.5,1))+
+    tm_raster(palette = viridis(50), style = "cont", legend.reverse = TRUE, breaks = c(0,0.1,AOA$parameters$threshold,0.5,1,1.5))+
             tm_layout(legend.position = c("right", "bottom"),
               legend.just = "left",
               frame = FALSE)
@@ -337,16 +388,32 @@ tm_shape(prediction_ffs)+
 
 ## Pixel-wise performance estimation
 
-```{r calibrate}
+```{r performancemodel}
 set.seed(5)
-expected_perf = calibrate_aoa(AOA, rfmodel_ffs)
+performancemodel = DItoErrormetric(model = rfmodel_ffs, trainDI = AOA$parameters)
+expected_RMSE = terra::predict(AOA$DI, performancemodel)
+expected_RMSE = terra::mask(expected_RMSE, AOA$AOA, maskvalues = 0)
 ```
 
 
-```{r calibrate-mapping}
-tm_shape(expected_perf$AOA$expected_RMSE)+
-    tm_raster(title = "Expected \nRMSE",style = "cont", legend.reverse = TRUE, palette = mako(50, direction = -1))+
-    tm_shape(expected_perf$AOA$AOA)+
+```{r performancemodel-plot}
+#| fig-width: 6
+#| fig-height: 6
+
+plot(performancemodel)+
+  scale_y_continuous(name = "RMSE")+
+  theme_light()+
+  theme(legend.position = "bottom", legend.title = element_blank())
+```
+
+
+
+
+```{r expectedRMSE-map}
+#| fig-height: 6
+tm_shape(expected_RMSE)+
+    tm_raster(title = "Expected \nRMSE", style = "cont", legend.reverse = TRUE, palette = mako(50, direction = -1))+
+    tm_shape(AOA$AOA)+
     tm_raster(palette = c("1" = NA, "0" = "darkgoldenrod1"), style = "cat", legend.show = FALSE)+
     tm_add_legend(type = "fill", col = "darkgoldenrod1", border.lwd = 0,labels = "Outside AOA")+
             tm_layout(legend.position = c("right", "bottom"),

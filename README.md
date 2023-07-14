@@ -12,3 +12,4 @@ Open `CAST4ecology.Rproj` with Rstudio. Open `index.qmd` and render the document
 The figures are written to `docs/index-files/figures-html`.
 
 
+To merge the images like in the book, use the image-postprocessing.sh in the directory `docs/index_files/figure-html`.
