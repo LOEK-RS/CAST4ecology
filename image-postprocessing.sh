@@ -15,6 +15,6 @@ convert performancemodel-plot-1.png expectedRMSE-map-1.png +append expectedRMSE.
 
 convert knndm-mapping-1.png knndm-mapping-2.png knndm-mapping-3.png +append knndm-mapping.png
 
-
+convert response-1.png predictors-1.png +append predictors-response.png
 
 
