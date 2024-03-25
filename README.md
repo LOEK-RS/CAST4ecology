@@ -1,8 +1,8 @@
 # CAST4ecology
 
 This repository contains reproducible Figures for the book chapter about CAST.
-It can be used as a guideline for spatial modelling with caret and CAST as well as mapping with tmap.
-For a more straight forward tutorial, please check out our vignettes.
+It can be used as a guideline for spatial modelling with caret and CAST.
+For a more straight forward tutorial, please check out our vignettes at the [CAST package website](https://hannameyer.github.io/CAST/).
 
 The rendered document can be seen [here](https://loek-rs.github.io/CAST4ecology/)
 

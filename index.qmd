@@ -52,7 +52,7 @@ data(splotdata) # load reference samples (example data from the CAST package)
 predictors <- rast("data/predictors.tif")
 training_data <- splotdata |> st_drop_geometry() # reference samples without coordinates
 modeldomain <- st_read("data/modeldomain.gpkg", quiet = TRUE)
-
+modeldomain <- st_transform(modeldomain,st_crs(splotdata))
 
 
 predictor_names <- names(predictors)
@@ -350,7 +350,7 @@ plot(rfmodel_ffs, plotType = "selected")+
 
 
 ```{r knndm-aoa}
-AOA = CAST::aoa(predictors, model = rfmodel_ffs)
+AOA = CAST::aoa(predictors, model = rfmodel_ffs, LPD=TRUE, verbose = FALSE)
 ```
 
 
@@ -370,6 +370,11 @@ tm_shape(AOA$DI)+
               legend.just = "left",
               frame = FALSE)
 
+tm_shape(AOA$LPD)+
+    tm_raster(palette = viridis(50), style = "cont", legend.reverse = TRUE)+
+            tm_layout(legend.position = c("right", "bottom"),
+              legend.just = "left",
+              frame = FALSE)
 
 tm_shape(prediction_ffs)+
     tm_raster(title = "Predicted \nSpecies Richness", style = "cont",
@@ -390,7 +395,7 @@ tm_shape(prediction_ffs)+
 
 ```{r performancemodel}
 set.seed(5)
-performancemodel = DItoErrormetric(model = rfmodel_ffs, trainDI = AOA$parameters)
+performancemodel = errorProfiles(model = rfmodel_ffs, trainDI = AOA$parameters)
 expected_RMSE = terra::predict(AOA$DI, performancemodel)
 expected_RMSE = terra::mask(expected_RMSE, AOA$AOA, maskvalues = 0)
 ```

@@ -13,7 +13,7 @@ convert ffs-selected-1.png ffs-prediction-1.png +append ffs-results.png
 
 convert performancemodel-plot-1.png expectedRMSE-map-1.png +append expectedRMSE.png
 
-convert knndm-mapping-1.png knndm-mapping-2.png +append knndm-mapping.png
+convert knndm-mapping-1.png knndm-mapping-2.png knndm-mapping-3.png +append knndm-mapping.png
 
 
 
